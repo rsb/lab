@@ -91,7 +91,18 @@ fn check_lab_core_zero_ecosystem_deps(root: &Path) -> Result<(), String> {
   }
 
   let stdout = String::from_utf8_lossy(&output.stdout);
-  let root_path_marker = format!("({}", root.to_string_lossy());
+  // `cargo tree` prints canonical paths, so match against the canonical root —
+  // otherwise a workspace reached via a symlink would miss its own members and
+  // pass on a real violation. (A member declared outside the workspace root,
+  // e.g. `members = ["../foo"]`, would still evade this path-based check; Lab's
+  // members all live under the root, so that case is left to review.)
+  let canonical_root = std::fs::canonicalize(root).map_err(|e| {
+    format!(
+      "could not canonicalize workspace root {}: {e}",
+      root.display()
+    )
+  })?;
+  let root_path_marker = format!("({}", canonical_root.to_string_lossy());
 
   let offenders: Vec<&str> = stdout
     .lines()
@@ -125,7 +136,7 @@ fn check_root_does_not_reference_report(root: &Path) -> Result<(), String> {
   let hits: Vec<String> = src
     .lines()
     .enumerate()
-    .filter(|(_, line)| line.contains("crate::report"))
+    .filter(|(_, line)| line_references_report(line))
     .map(|(i, line)| format!("line {}: {}", i + 1, line.trim()))
     .collect();
 
@@ -137,4 +148,35 @@ fn check_root_does_not_reference_report(root: &Path) -> Result<(), String> {
       hits.join("; ")
     ))
   }
+}
+
+/// Whether a line references the `report` child from the crate root — directly
+/// (`crate::report`, `self::report`, with any spacing) or inside a brace-import
+/// group (`crate::{… report …}`). Whitespace is collapsed first so a trivial
+/// reformat (`crate :: report`) cannot hide the reference. Honest about being
+/// textual: a macro-expanded reference would still slip past.
+fn line_references_report(line: &str) -> bool {
+  let compact: String = line.split_whitespace().collect();
+  for root in ["crate::", "self::"] {
+    for (idx, _) in compact.match_indices(root) {
+      let after = &compact[idx + root.len()..];
+      if is_report_segment(after) {
+        return true; // crate::report or crate::report::…
+      }
+      if let Some(group) = after.strip_prefix('{') {
+        let group = group.split('}').next().unwrap_or(group);
+        if group.split(',').any(is_report_segment) {
+          return true; // crate::{ …, report, … }
+        }
+      }
+    }
+  }
+  false
+}
+
+/// Whether `s` begins with the path segment `report` (so `report`, `report::X`,
+/// `report}` match, but `reporter` does not).
+fn is_report_segment(s: &str) -> bool {
+  s.strip_prefix("report")
+    .is_some_and(|rest| !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
 }

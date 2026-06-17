@@ -4,7 +4,7 @@
 use std::error::Error;
 use std::fmt;
 
-use lab_core::{Chain, Fail, Rendered};
+use lab_core::{Chain, Fail, MAX_DEPTH, Rendered};
 
 #[derive(Debug)]
 struct Leaf;
@@ -101,4 +101,39 @@ fn a_single_link_chain_renders_without_a_separator() {
     Leaf.rendered().to_string(),
     "config.load failed: file is missing"
   );
+}
+
+/// A pathological error whose `source()` points back at itself — valid in safe
+/// Rust, and the reason the walk is depth-capped. Without the cap, walking this
+/// would never terminate.
+#[derive(Debug)]
+struct SelfCycle;
+
+impl fmt::Display for SelfCycle {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.write_str("cycle")
+  }
+}
+
+impl Error for SelfCycle {
+  fn source(&self) -> Option<&(dyn Error + 'static)> {
+    Some(self)
+  }
+}
+
+impl Fail for SelfCycle {}
+
+#[test]
+fn a_cyclic_chain_walk_terminates_at_the_cap() {
+  // Without the depth cap this iterates forever; with it, the walk yields at
+  // most MAX_DEPTH links and stops.
+  assert_eq!(SelfCycle.chain().count(), MAX_DEPTH);
+}
+
+#[test]
+fn rendering_a_cyclic_chain_terminates_and_marks_truncation() {
+  // Returns at all (no hang / unbounded allocation), and the truncation is
+  // visible rather than silent.
+  let rendered = SelfCycle.rendered().to_string();
+  assert!(rendered.ends_with(": …"), "got: {rendered}");
 }

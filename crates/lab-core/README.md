@@ -37,7 +37,9 @@ Three things define `Fail`:
   real chain — never a stub that lies about its own depth.
 - **`Display` renders one level only.** Each error prints its own message; the
   chain-spanning reading is assembled by `Rendered`, not by any level restating
-  the levels beneath it.
+  the levels beneath it. Because `Rendered` reproduces that message verbatim
+  into logs and UI, it names the operation and must never carry a value unsafe
+  to log — a secret, a credential, or personal data.
 
 There is **no blanket implementation**. A blanket `impl Fail for T: Error` would
 auto-enrol every error type and make the contract assert nothing. A type joins
@@ -60,6 +62,11 @@ Both are views, not error types: they implement no `Error`, hold no failure
 data, and carry no opinion a crate inherits. They construct from any
 `&dyn std::error::Error`, so they work over external errors too; `Fail` offers
 `chain()` and `rendered()` as convenience over its implementors.
+
+The walk is bounded by `MAX_DEPTH`. `source()` is supposed to be acyclic and
+finite, but the adapters accept any error — including buggy or hostile external
+ones — so a cyclic or unbounded chain cannot make them hang or allocate without
+end: `Chain` stops at the cap, and `Rendered` ends with a visible `: …` marker.
 
 ## Implementing the contract
 
